@@ -24,6 +24,15 @@ const createBookingSchema = z.object({
   policy_override   : z.boolean().default(false),
   override_reason   : z.string().min(10).optional(),
   ndc_offer_id      : z.string().optional(),
+  // NDC OrderCreate extensions
+  selected_seat     : z.string().max(10).optional(),
+  selected_services : z.array(z.object({
+    serviceId   : z.string(),
+    type        : z.string(),
+    code        : z.string().optional(),
+    description : z.string(),
+    priceCents  : z.number().int().min(0),
+  })).optional().default([]),
 })
 .refine(d => !d.policy_override || (d.policy_override && d.override_reason),
   { message: 'override_reason is required when policy_override is true', path: ['override_reason'] }

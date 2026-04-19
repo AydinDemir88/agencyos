@@ -22,6 +22,7 @@ async function createBooking(req, res) {
     base_fare, taxes, service_fee, total_amount, currency,
     in_policy, policy_override, override_reason,
     ndc_offer_id,
+    selected_seat, selected_services,
   } = req.body
 
   try {
@@ -51,9 +52,9 @@ async function createBooking(req, res) {
          cabin_class, fare_brand,
          base_fare, taxes, service_fee, total_amount, currency,
          in_policy, policy_override, override_reason,
-         ndc_offer_id, status
+         ndc_offer_id, selected_seat, selected_services, status
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'confirmed')
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'confirmed')
        RETURNING *`,
       [
         pnr, corporate_id, employee_id, caller.id, airline_config_id || null,
@@ -62,6 +63,8 @@ async function createBooking(req, res) {
         base_fare, taxes, service_fee, total_amount, currency,
         in_policy, policy_override, override_reason || null,
         ndc_offer_id || null,
+        selected_seat || null,
+        JSON.stringify(selected_services || []),
       ]
     )
 

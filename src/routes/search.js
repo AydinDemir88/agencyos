@@ -41,18 +41,44 @@ const searchSchema = z.object({
 );
 
 // ---------------------------------------------------------------------------
+// NDC follow-up step schemas
+// ---------------------------------------------------------------------------
+const cabinEnum = z.enum(['economy','premium_economy','business','first']);
+
+const offerPriceSchema = z.object({
+  offerId       : z.string().min(1),
+  totalCents    : z.number().int().min(0),
+  baseFareCents : z.number().int().min(0),
+  taxesCents    : z.number().int().min(0),
+  currency      : z.string().length(3).toUpperCase(),
+  cabinClass    : cabinEnum,
+  airlineCode   : z.string().min(2).max(3),
+  origin        : z.string().length(3).toUpperCase(),
+  destination   : z.string().length(3).toUpperCase(),
+})
+
+const serviceListSchema = z.object({
+  pricedOfferId : z.string().min(1),
+  airlineCode   : z.string().min(2).max(3),
+  cabinClass    : cabinEnum,
+})
+
+const seatAvailSchema = z.object({
+  pricedOfferId : z.string().min(1),
+  airlineCode   : z.string().min(2).max(3),
+  cabinClass    : cabinEnum,
+  origin        : z.string().length(3).toUpperCase(),
+  destination   : z.string().length(3).toUpperCase(),
+})
+
+// ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
 router.use(verifyToken);
 
-/**
- * POST /search/flights
- *
- * Queries all active NDC airlines, runs every offer through checkPolicy(),
- * and returns offers sorted: compliant first, then by price ascending.
- *
- * Access: all authenticated roles (consultants search on behalf of clients)
- */
-router.post('/flights', validate(searchSchema), ctrl.searchFlights);
+router.post('/flights',           validate(searchSchema),     ctrl.searchFlights);
+router.post('/offer-price',       validate(offerPriceSchema), ctrl.offerPrice);
+router.post('/service-list',      validate(serviceListSchema),ctrl.serviceList);
+router.post('/seat-availability', validate(seatAvailSchema),  ctrl.seatAvailability);
 
 module.exports = router;

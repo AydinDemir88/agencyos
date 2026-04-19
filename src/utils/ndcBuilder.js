@@ -191,4 +191,95 @@ function parseMockAirShoppingRS(iataCode, origin, destination, depDate) {
   ];
 }
 
-module.exports = { buildPingAirShoppingRQ, buildAuthHeaders, parseMockAirShoppingRS };
+// ---------------------------------------------------------------------------
+// Mock OfferPrice RS — NDC 21.3
+// ---------------------------------------------------------------------------
+/**
+ * Re-price a selected offer.  10% chance of a small price change to simulate
+ * real-world yield-management fluctuations.
+ */
+function mockOfferPriceRS({ offerId, totalCents, baseFareCents, taxesCents, currency }) {
+  const priceChanged   = Math.random() < 0.1
+  const delta          = priceChanged ? Math.round(totalCents * 0.02) : 0
+
+  return {
+    pricedOfferId         : crypto.randomUUID(),
+    originalOfferId       : offerId,
+    baseFareCents         : baseFareCents,
+    taxesCents            : taxesCents,
+    surchargesCents       : 0,
+    totalCents            : totalCents + delta,
+    currency              : currency,
+    priceChanged          : priceChanged,
+    priceDeltaCents       : delta,
+    priceGuaranteeTtlSecs : 900,
+    priceGuaranteeExpiry  : new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mock ServiceList RS — NDC 21.3
+// ---------------------------------------------------------------------------
+function mockServiceListRS(airlineCode, cabinClass) {
+  const uid = () => crypto.randomUUID()
+  const services = [
+    { serviceId: uid(), type: 'BAGGAGE', code: 'BAG1', description: '1st checked bag (23 kg)',  priceCents: 3500, currency: 'USD', rfic: 'C', rfisc: '0GO' },
+    { serviceId: uid(), type: 'BAGGAGE', code: 'BAG2', description: '2nd checked bag (23 kg)',  priceCents: 5500, currency: 'USD', rfic: 'C', rfisc: '0G0' },
+    { serviceId: uid(), type: 'BAGGAGE', code: 'BAG3', description: '3rd checked bag (23 kg)',  priceCents: 7500, currency: 'USD', rfic: 'C', rfisc: '0G1' },
+    { serviceId: uid(), type: 'MEAL',    code: 'MLML', description: 'Standard meal',            priceCents: 1500, currency: 'USD', rfic: 'G', rfisc: '0BX' },
+    { serviceId: uid(), type: 'MEAL',    code: 'VGML', description: 'Vegetarian meal (VGML)',   priceCents: 1500, currency: 'USD', rfic: 'G', rfisc: '0BX' },
+    { serviceId: uid(), type: 'MEAL',    code: 'KSML', description: 'Kosher meal (KSML)',       priceCents: 1500, currency: 'USD', rfic: 'G', rfisc: '0BX' },
+    { serviceId: uid(), type: 'MEAL',    code: 'DBML', description: 'Diabetic meal (DBML)',     priceCents: 1500, currency: 'USD', rfic: 'G', rfisc: '0BX' },
+  ]
+  if (['business', 'first'].includes(cabinClass)) {
+    services.push(
+      { serviceId: uid(), type: 'LOUNGE', code: 'LNGE', description: 'Airport lounge access', priceCents: 5000, currency: 'USD', rfic: 'A', rfisc: 'LNG' }
+    )
+  }
+  return { services }
+}
+
+// ---------------------------------------------------------------------------
+// Mock SeatAvailability RS — NDC 21.3
+// ---------------------------------------------------------------------------
+function mockSeatAvailabilityRS(cabinClass) {
+  const isNarrow   = ['economy', 'premium_economy'].includes(cabinClass)
+  const columns    = isNarrow ? ['A','B','C','D','E','F'] : ['A','C','D','F']
+  const startRow   = isNarrow ? 10 : 1
+  const endRow     = isNarrow ? 32 : 8
+  const exitRows   = isNarrow ? [14, 15, 25] : []
+  const xtraRows   = isNarrow ? [10, 14, 15] : [1, 2]
+  const colType    = { A:'window', B:'middle', C:'aisle', D:'aisle', E:'middle', F:'window' }
+
+  // Deterministic occupancy — avoids flickering across render calls
+  const isOccupied = (row, col) => ((row * 7 + col.charCodeAt(0) * 3) % 10) < 3
+
+  const rows = []
+  for (let r = startRow; r <= endRow; r++) {
+    rows.push({
+      rowNumber : r,
+      exitRow   : exitRows.includes(r),
+      seats     : columns.map(col => ({
+        seatId       : crypto.randomUUID(),
+        column       : col,
+        type         : colType[col] || 'middle',
+        status       : isOccupied(r, col) ? 'occupied' : 'available',
+        exitRow      : exitRows.includes(r),
+        extraLegroom : xtraRows.includes(r),
+        priceCents   : xtraRows.includes(r) ? 2000 : 0,
+        currency     : 'USD',
+      })),
+    })
+  }
+
+  return { cabinClass, columns, rows, currency: 'USD' }
+}
+
+module.exports = {
+  buildPingAirShoppingRQ,
+  buildAuthHeaders,
+  parseMockAirShoppingRS,
+  mockOfferPriceRS,
+  mockServiceListRS,
+  mockSeatAvailabilityRS,
+};

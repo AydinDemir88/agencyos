@@ -1,7 +1,14 @@
 const pool           = require('../config/db');
 const { writeAudit } = require('../utils/audit');
 const { decrypt }    = require('../utils/crypto');
-const { buildPingAirShoppingRQ, buildAuthHeaders, parseMockAirShoppingRS } = require('../utils/ndcBuilder');
+const {
+  buildPingAirShoppingRQ,
+  buildAuthHeaders,
+  parseMockAirShoppingRS,
+  mockOfferPriceRS,
+  mockServiceListRS,
+  mockSeatAvailabilityRS,
+} = require('../utils/ndcBuilder');
 const { checkPolicy }= require('../utils/policyEngine');
 const crypto         = require('crypto');
 
@@ -317,4 +324,34 @@ async function searchFlights(req, res) {
   });
 }
 
-module.exports = { searchFlights };
+// ---------------------------------------------------------------------------
+// POST /search/offer-price  — NDC 21.3 OfferPrice
+// ---------------------------------------------------------------------------
+async function offerPrice(req, res) {
+  const { offerId, totalCents, baseFareCents, taxesCents, currency } = req.body
+  await new Promise(r => setTimeout(r, Math.floor(Math.random() * 150) + 80))
+  const data = mockOfferPriceRS({ offerId, totalCents, baseFareCents, taxesCents, currency })
+  return res.json({ data })
+}
+
+// ---------------------------------------------------------------------------
+// POST /search/service-list — NDC 21.3 ServiceList (ancillaries)
+// ---------------------------------------------------------------------------
+async function serviceList(req, res) {
+  const { airlineCode, cabinClass } = req.body
+  await new Promise(r => setTimeout(r, Math.floor(Math.random() * 100) + 50))
+  const data = mockServiceListRS(airlineCode, cabinClass)
+  return res.json({ data })
+}
+
+// ---------------------------------------------------------------------------
+// POST /search/seat-availability — NDC 21.3 SeatAvailability
+// ---------------------------------------------------------------------------
+async function seatAvailability(req, res) {
+  const { cabinClass } = req.body
+  await new Promise(r => setTimeout(r, Math.floor(Math.random() * 120) + 60))
+  const data = mockSeatAvailabilityRS(cabinClass)
+  return res.json({ data })
+}
+
+module.exports = { searchFlights, offerPrice, serviceList, seatAvailability };
