@@ -192,7 +192,7 @@ async function searchFlights(req, res) {
        FROM   ndc_airline_configs
        WHERE  is_active = true
          AND  environment = $1`,
-      [process.env.NODE_ENV === 'production' ? 'PRODUCTION' : 'SANDBOX']
+      [process.env.NDC_ENVIRONMENT || (process.env.NODE_ENV === 'production' ? 'PRODUCTION' : 'SANDBOX')]
     );
     airlineConfigs = rows;
   } catch (err) {
