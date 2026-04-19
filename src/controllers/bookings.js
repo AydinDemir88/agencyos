@@ -25,10 +25,25 @@ async function createBooking(req, res) {
   } = req.body
 
   try {
+    // Check corporate has sufficient credit
+    const { rows: creditRows } = await pool.query(
+      `SELECT credit_limit, credit_used FROM corporates WHERE id = $1`,
+      [corporate_id]
+    )
+    if (!creditRows[0]) return res.status(404).json({ error: 'Corporate not found' })
+    const { credit_limit, credit_used } = creditRows[0]
+    if (credit_used + total_amount > credit_limit) {
+      const available = credit_limit - credit_used
+      return res.status(400).json({
+        error: `Insufficient credit limit. Available: ${available} ${currency}, required: ${total_amount} ${currency}`,
+      })
+    }
+
     // Generate unique PNR (retry once on collision)
     let pnr = generatePNR()
     const existing = await pool.query('SELECT id FROM bookings WHERE pnr = $1', [pnr])
     if (existing.rows.length > 0) pnr = generatePNR()
+
     const { rows } = await pool.query(
       `INSERT INTO bookings (
          pnr, corporate_id, employee_id, consultant_id, airline_config_id,
