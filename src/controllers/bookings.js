@@ -24,12 +24,11 @@ async function createBooking(req, res) {
     ndc_offer_id,
   } = req.body
 
-  // Generate unique PNR (retry once on collision)
-  let pnr = generatePNR()
-  const existing = await pool.query('SELECT id FROM bookings WHERE pnr = $1', [pnr])
-  if (existing.rows.length > 0) pnr = generatePNR()
-
   try {
+    // Generate unique PNR (retry once on collision)
+    let pnr = generatePNR()
+    const existing = await pool.query('SELECT id FROM bookings WHERE pnr = $1', [pnr])
+    if (existing.rows.length > 0) pnr = generatePNR()
     const { rows } = await pool.query(
       `INSERT INTO bookings (
          pnr, corporate_id, employee_id, consultant_id, airline_config_id,
@@ -69,7 +68,7 @@ async function createBooking(req, res) {
 
     return res.status(201).json({ data: rows[0] })
   } catch (err) {
-    console.error('[BOOKINGS] createBooking error:', err.message)
+    console.error('[BOOKINGS] createBooking error:', err.message, err.detail || '', err.code || '')
     return res.status(500).json({ error: 'Internal server error' })
   }
 }
