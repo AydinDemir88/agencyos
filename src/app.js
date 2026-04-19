@@ -10,6 +10,7 @@ const userRoutes       = require('./routes/users');
 const ndcRoutes        = require('./routes/ndc');
 const corporateRoutes  = require('./routes/corporates');
 const searchRoutes     = require('./routes/search');
+const bookingRoutes    = require('./routes/bookings');
 
 const app = express();
 
@@ -66,6 +67,7 @@ app.use('/users',        userRoutes);
 app.use('/ndc/airlines', ndcRoutes);
 app.use('/corporates',   corporateRoutes);
 app.use('/search',       searchRoutes);
+app.use('/bookings',     bookingRoutes);
 
 // Health check (no auth required)
 app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
