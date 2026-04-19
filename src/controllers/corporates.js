@@ -14,6 +14,12 @@ const CORPORATE_PUBLIC_COLS = `
   status, notes, created_by, created_at, updated_at
 `;
 
+// Core columns that always exist
+const EMPLOYEE_CORE_COLS = `
+  id, corporate_id, name, title, department,
+  email, phone, cabin_tier, status, created_at
+`;
+// Full columns after migration
 const EMPLOYEE_PUBLIC_COLS = `
   id, corporate_id, name, title, department,
   email, phone, employee_number, cost_center, nationality, date_of_birth,
@@ -306,11 +312,10 @@ async function listEmployees(req, res) {
     const where       = `WHERE ${conditions.join(' AND ')}`;
     const countValues = [...values];
 
-    const [countResult, dataResult] = await Promise.all([
+    const listQuery = async (cols) => Promise.all([
       pool.query(`SELECT COUNT(*) FROM corporate_employees ${where}`, countValues),
       pool.query(
-        `SELECT ${EMPLOYEE_PUBLIC_COLS},
-                (passport_enc IS NOT NULL) AS passport_enc
+        `SELECT ${cols}, (passport_enc IS NOT NULL) AS passport_enc
          FROM   corporate_employees
          ${where}
          ORDER  BY name ASC
@@ -319,6 +324,16 @@ async function listEmployees(req, res) {
         [...values, Number(limit), offset]
       ),
     ]);
+
+    let countResult, dataResult;
+    try {
+      [countResult, dataResult] = await listQuery(EMPLOYEE_PUBLIC_COLS);
+    } catch (colErr) {
+      if (colErr.code === '42703') {
+        console.warn('[CORP] listEmployees: profile columns missing, using legacy select.');
+        [countResult, dataResult] = await listQuery(EMPLOYEE_CORE_COLS);
+      } else { throw colErr; }
+    }
 
     const total = parseInt(countResult.rows[0].count, 10);
     return res.status(200).json({
@@ -337,14 +352,20 @@ async function listEmployees(req, res) {
 async function getEmployee(req, res) {
   const { id, eid } = req.params;
 
+  const fetchEmployee = async (cols) => pool.query(
+    `SELECT ${cols}, (passport_enc IS NOT NULL) AS passport_enc
+     FROM   corporate_employees
+     WHERE  id = $1 AND corporate_id = $2 LIMIT 1`,
+    [eid, id]
+  );
   try {
-    const { rows } = await pool.query(
-      `SELECT ${EMPLOYEE_PUBLIC_COLS}, (passport_enc IS NOT NULL) AS passport_enc
-       FROM   corporate_employees
-       WHERE  id = $1 AND corporate_id = $2
-       LIMIT  1`,
-      [eid, id]
-    );
+    let rows;
+    try {
+      ({ rows } = await fetchEmployee(EMPLOYEE_PUBLIC_COLS));
+    } catch (colErr) {
+      if (colErr.code === '42703') { ({ rows } = await fetchEmployee(EMPLOYEE_CORE_COLS)); }
+      else throw colErr;
+    }
     if (!rows[0]) return res.status(404).json({ error: 'Employee not found' });
     return res.status(200).json({ data: toPublicEmployee(rows[0]) });
   } catch (err) {
@@ -388,24 +409,50 @@ async function createEmployee(req, res) {
     }
   }
 
+  // Try with new profile columns first; if migration not yet applied fall back to legacy columns
+  const fullInsert = async () => pool.query(
+    `INSERT INTO corporate_employees
+       (corporate_id, name, title, department, email, phone,
+        employee_number, cost_center, nationality, date_of_birth,
+        passport_enc, iv_passport, cabin_tier,
+        frequent_flyers, preferences)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     RETURNING ${EMPLOYEE_PUBLIC_COLS}, (passport_enc IS NOT NULL) AS passport_enc`,
+    [
+      id, name, title || null, department || null, email, phone || null,
+      employee_number || null, cost_center || null,
+      nationality || null, date_of_birth || null,
+      passportEnc, ivPassport, cabin_tier || null,
+      frequent_flyers ? JSON.stringify(frequent_flyers) : null,
+      preferences     ? JSON.stringify(preferences)     : null,
+    ]
+  );
+
+  const legacyInsert = async () => pool.query(
+    `INSERT INTO corporate_employees
+       (corporate_id, name, title, department, email, phone,
+        passport_enc, iv_passport, cabin_tier)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING id, corporate_id, name, title, department,
+               email, phone, cabin_tier, status, created_at,
+               (passport_enc IS NOT NULL) AS passport_enc`,
+    [id, name, title || null, department || null, email, phone || null,
+     passportEnc, ivPassport, cabin_tier || null]
+  );
+
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO corporate_employees
-         (corporate_id, name, title, department, email, phone,
-          employee_number, cost_center, nationality, date_of_birth,
-          passport_enc, iv_passport, cabin_tier,
-          frequent_flyers, preferences)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-       RETURNING ${EMPLOYEE_PUBLIC_COLS}, (passport_enc IS NOT NULL) AS passport_enc`,
-      [
-        id, name, title || null, department || null, email, phone || null,
-        employee_number || null, cost_center || null,
-        nationality || null, date_of_birth || null,
-        passportEnc, ivPassport, cabin_tier || null,
-        frequent_flyers ? JSON.stringify(frequent_flyers) : null,
-        preferences     ? JSON.stringify(preferences)     : null,
-      ]
-    );
+    let rows;
+    try {
+      ({ rows } = await fullInsert());
+    } catch (err) {
+      if (err.code === '42703') {
+        // New profile columns not migrated yet — fall back to legacy
+        console.warn('[CORP] createEmployee: profile columns missing, using legacy insert. Run DB migration.');
+        ({ rows } = await legacyInsert());
+      } else {
+        throw err;
+      }
+    }
 
     await writeAudit({
       userId: caller.id, action: 'EMPLOYEE_CREATE',
@@ -418,7 +465,7 @@ async function createEmployee(req, res) {
     return res.status(201).json({ data: toPublicEmployee(rows[0]) });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Employee email already registered for this corporate' });
-    console.error('[CORP] createEmployee insert error:', err.message);
+    console.error('[CORP] createEmployee insert error:', err.message, err.detail || '');
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
@@ -487,17 +534,50 @@ async function updateEmployee(req, res) {
     addField('iv_passport',  passportResult.iv);
   }
 
+  // Strip new profile columns from SET if migration not yet applied
+  const NEW_PROFILE_COLS = new Set(['employee_number','cost_center','nationality','date_of_birth','frequent_flyers','preferences']);
+
   if (setClauses.length === 0) return res.status(400).json({ error: 'No fields to update' });
 
   values.push(eid, id);
   try {
-    const { rows } = await pool.query(
-      `UPDATE corporate_employees
-       SET    ${setClauses.join(', ')}
-       WHERE  id = $${values.length - 1} AND corporate_id = $${values.length}
-       RETURNING ${EMPLOYEE_PUBLIC_COLS}, (passport_enc IS NOT NULL) AS passport_enc`,
-      values
-    );
+    let rows;
+    try {
+      ({ rows } = await pool.query(
+        `UPDATE corporate_employees
+         SET    ${setClauses.join(', ')}
+         WHERE  id = $${values.length - 1} AND corporate_id = $${values.length}
+         RETURNING ${EMPLOYEE_PUBLIC_COLS}, (passport_enc IS NOT NULL) AS passport_enc`,
+        values
+      ));
+    } catch (err) {
+      if (err.code === '42703') {
+        // Fall back: rebuild SET clauses without new profile columns
+        console.warn('[CORP] updateEmployee: profile columns missing, using legacy update.');
+        const legacySet    = [];
+        const legacyValues = [];
+        const addLegacy    = (col, val) => { legacyValues.push(val); legacySet.push(`${col} = $${legacyValues.length}`); };
+        if (name       !== undefined) addLegacy('name',       name);
+        if (title      !== undefined) addLegacy('title',      title);
+        if (department !== undefined) addLegacy('department', department);
+        if (email      !== undefined) addLegacy('email',      email);
+        if (phone      !== undefined) addLegacy('phone',      phone);
+        if (cabin_tier !== undefined) addLegacy('cabin_tier', cabin_tier);
+        if (status     !== undefined) addLegacy('status',     status);
+        if (passport   !== undefined) { addLegacy('passport_enc', passportResult.enc); addLegacy('iv_passport', passportResult.iv); }
+        if (!legacySet.length) return res.status(400).json({ error: 'No updatable fields' });
+        legacyValues.push(eid, id);
+        ({ rows } = await pool.query(
+          `UPDATE corporate_employees SET ${legacySet.join(', ')}
+           WHERE id = $${legacyValues.length - 1} AND corporate_id = $${legacyValues.length}
+           RETURNING id, corporate_id, name, title, department, email, phone, cabin_tier, status, created_at,
+                     (passport_enc IS NOT NULL) AS passport_enc`,
+          legacyValues
+        ));
+      } else {
+        throw err;
+      }
+    }
     if (!rows[0]) return res.status(404).json({ error: 'Employee not found' });
 
     await writeAudit({
