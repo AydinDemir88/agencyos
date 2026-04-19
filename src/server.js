@@ -1,5 +1,10 @@
 require('dotenv').config();
 
+// Accept either DB_URL or DATABASE_URL (Railway injects DATABASE_URL by default)
+if (!process.env.DB_URL && process.env.DATABASE_URL) {
+  process.env.DB_URL = process.env.DATABASE_URL;
+}
+
 // Guard: abort startup if critical secrets are missing
 const REQUIRED_ENV = ['DB_URL', 'JWT_SECRET', 'MASTER_ENCRYPTION_KEY'];
 for (const key of REQUIRED_ENV) {
