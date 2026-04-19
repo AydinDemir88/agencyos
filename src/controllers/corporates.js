@@ -16,7 +16,8 @@ const CORPORATE_PUBLIC_COLS = `
 
 const EMPLOYEE_PUBLIC_COLS = `
   id, corporate_id, name, title, department,
-  email, phone, cabin_tier, status, created_at
+  email, phone, employee_number, cost_center, nationality, date_of_birth,
+  cabin_tier, frequent_flyers, preferences, status, created_at
 `;
 
 // ---------------------------------------------------------------------------
@@ -26,17 +27,23 @@ const EMPLOYEE_PUBLIC_COLS = `
 /** Replace passport_enc / iv_passport with a boolean presence flag */
 function toPublicEmployee(row) {
   return {
-    id           : row.id,
-    corporate_id : row.corporate_id,
-    name         : row.name,
-    title        : row.title,
-    department   : row.department,
-    email        : row.email,
-    phone        : row.phone,
-    cabin_tier   : row.cabin_tier,
-    status       : row.status,
-    created_at   : row.created_at,
-    has_passport : !!(row.passport_enc),
+    id              : row.id,
+    corporate_id    : row.corporate_id,
+    name            : row.name,
+    title           : row.title,
+    department      : row.department,
+    email           : row.email,
+    phone           : row.phone,
+    employee_number : row.employee_number,
+    cost_center     : row.cost_center,
+    nationality     : row.nationality,
+    date_of_birth   : row.date_of_birth,
+    cabin_tier      : row.cabin_tier,
+    frequent_flyers : row.frequent_flyers || [],
+    preferences     : row.preferences    || {},
+    status          : row.status,
+    created_at      : row.created_at,
+    has_passport    : !!(row.passport_enc),
   };
 }
 
@@ -362,7 +369,11 @@ async function createEmployee(req, res) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 
-  const { name, title, department, email, phone, passport, cabin_tier } = req.body;
+  const {
+    name, title, department, email, phone, passport, cabin_tier,
+    employee_number, cost_center, nationality, date_of_birth,
+    frequent_flyers, preferences,
+  } = req.body;
 
   // Encrypt passport JSON if provided
   let passportEnc = null, ivPassport = null;
@@ -381,11 +392,19 @@ async function createEmployee(req, res) {
     const { rows } = await pool.query(
       `INSERT INTO corporate_employees
          (corporate_id, name, title, department, email, phone,
-          passport_enc, iv_passport, cabin_tier)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          employee_number, cost_center, nationality, date_of_birth,
+          passport_enc, iv_passport, cabin_tier,
+          frequent_flyers, preferences)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING ${EMPLOYEE_PUBLIC_COLS}, (passport_enc IS NOT NULL) AS passport_enc`,
-      [id, name, title || null, department || null, email, phone || null,
-       passportEnc, ivPassport, cabin_tier || null]
+      [
+        id, name, title || null, department || null, email, phone || null,
+        employee_number || null, cost_center || null,
+        nationality || null, date_of_birth || null,
+        passportEnc, ivPassport, cabin_tier || null,
+        frequent_flyers ? JSON.stringify(frequent_flyers) : null,
+        preferences     ? JSON.stringify(preferences)     : null,
+      ]
     );
 
     await writeAudit({
@@ -429,7 +448,11 @@ async function updateEmployee(req, res) {
 
   if (!existing) return res.status(404).json({ error: 'Employee not found' });
 
-  const { name, title, department, email, phone, passport, cabin_tier, status } = req.body;
+  const {
+    name, title, department, email, phone, passport, cabin_tier, status,
+    employee_number, cost_center, nationality, date_of_birth,
+    frequent_flyers, preferences,
+  } = req.body;
 
   // Re-encrypt passport if a new value was provided
   let passportResult;
@@ -446,14 +469,20 @@ async function updateEmployee(req, res) {
 
   const addField = (col, val) => { values.push(val); setClauses.push(`${col} = $${values.length}`); };
 
-  if (name       !== undefined) addField('name',       name);
-  if (title      !== undefined) addField('title',      title);
-  if (department !== undefined) addField('department', department);
-  if (email      !== undefined) addField('email',      email);
-  if (phone      !== undefined) addField('phone',      phone);
-  if (cabin_tier !== undefined) addField('cabin_tier', cabin_tier);
-  if (status     !== undefined) addField('status',     status);
-  if (passport   !== undefined) {
+  if (name            !== undefined) addField('name',            name);
+  if (title           !== undefined) addField('title',           title);
+  if (department      !== undefined) addField('department',      department);
+  if (email           !== undefined) addField('email',           email);
+  if (phone           !== undefined) addField('phone',           phone);
+  if (employee_number !== undefined) addField('employee_number', employee_number);
+  if (cost_center     !== undefined) addField('cost_center',     cost_center);
+  if (nationality     !== undefined) addField('nationality',     nationality);
+  if (date_of_birth   !== undefined) addField('date_of_birth',   date_of_birth);
+  if (cabin_tier      !== undefined) addField('cabin_tier',      cabin_tier);
+  if (status          !== undefined) addField('status',          status);
+  if (frequent_flyers !== undefined) addField('frequent_flyers', JSON.stringify(frequent_flyers));
+  if (preferences     !== undefined) addField('preferences',     JSON.stringify(preferences));
+  if (passport        !== undefined) {
     addField('passport_enc', passportResult.enc);
     addField('iv_passport',  passportResult.iv);
   }
@@ -522,6 +551,85 @@ async function deleteEmployee(req, res) {
     console.error('[CORP] deleteEmployee error:', err.message);
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+// ---------------------------------------------------------------------------
+// POST /corporates/:id/employees/import  — bulk create from Excel/CSV parse
+// ---------------------------------------------------------------------------
+async function importEmployees(req, res) {
+  const { id }   = req.params;
+  const caller   = req.user;
+  const ip       = req.ip;
+  const ua       = req.headers['user-agent'] || null;
+
+  try {
+    if (!(await assertCorporateExists(id, res))) return;
+  } catch (err) {
+    console.error('[CORP] importEmployees corp check error:', err.message);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+
+  const { employees } = req.body;
+
+  const created  = [];
+  const skipped  = [];
+
+  for (const emp of employees) {
+    const {
+      name, title, department, email, phone,
+      employee_number, cost_center, nationality, date_of_birth,
+      passport, cabin_tier, frequent_flyers, preferences,
+    } = emp;
+
+    let passportEnc = null, ivPassport = null;
+    if (passport) {
+      try {
+        const { ciphertext, iv } = encrypt(JSON.stringify(passport));
+        passportEnc = ciphertext;
+        ivPassport  = iv;
+      } catch (_) { /* skip encryption failure, continue */ }
+    }
+
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO corporate_employees
+           (corporate_id, name, title, department, email, phone,
+            employee_number, cost_center, nationality, date_of_birth,
+            passport_enc, iv_passport, cabin_tier, frequent_flyers, preferences)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (corporate_id, email) DO NOTHING
+         RETURNING id, email`,
+        [
+          id, name, title || null, department || null, email, phone || null,
+          employee_number || null, cost_center || null,
+          nationality || null, date_of_birth || null,
+          passportEnc, ivPassport, cabin_tier || null,
+          frequent_flyers ? JSON.stringify(frequent_flyers) : null,
+          preferences     ? JSON.stringify(preferences)     : null,
+        ]
+      );
+      if (rows[0]) {
+        created.push(rows[0].id);
+      } else {
+        skipped.push(email); // already exists
+      }
+    } catch (err) {
+      console.error('[CORP] importEmployees row error:', err.message);
+      skipped.push(email);
+    }
+  }
+
+  await writeAudit({
+    userId: caller.id, action: 'EMPLOYEE_IMPORT',
+    resourceType: 'corporate_employee', resourceId: id,
+    ipAddress: ip, userAgent: ua,
+    payload: { total: employees.length, created: created.length, skipped: skipped.length },
+    result: 'success',
+  });
+
+  return res.status(201).json({
+    data: { created: created.length, skipped: skipped.length, skipped_emails: skipped },
+  });
 }
 
 // =============================================================================
@@ -789,7 +897,7 @@ module.exports = {
   // Corporates
   listCorporates, getCorporate, createCorporate, updateCorporate, deleteCorporate,
   // Employees
-  listEmployees, getEmployee, createEmployee, updateEmployee, deleteEmployee,
+  listEmployees, getEmployee, createEmployee, updateEmployee, deleteEmployee, importEmployees,
   // Policy
   getPolicy, upsertPolicy,
   // Financial

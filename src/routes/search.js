@@ -8,36 +8,68 @@ const ctrl        = require('../controllers/search');
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
+const multiCityLegSchema = z.object({
+  origin_iata      : z.string().length(3).toUpperCase().regex(/^[A-Z]{3}$/),
+  destination_iata : z.string().length(3).toUpperCase().regex(/^[A-Z]{3}$/),
+  departure_date   : z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD format'),
+}).refine(d => d.origin_iata !== d.destination_iata, {
+  message: 'origin and destination cannot be the same',
+  path: ['destination_iata'],
+})
+
 const searchSchema = z.object({
   corporate_id     : z.string().uuid('corporate_id must be a valid UUID'),
   employee_id      : z.string().uuid().optional(),
 
-  origin_iata      : z.string().length(3).toUpperCase()
-                       .regex(/^[A-Z]{3}$/, 'origin_iata must be a 3-letter IATA code'),
-  destination_iata : z.string().length(3).toUpperCase()
-                       .regex(/^[A-Z]{3}$/, 'destination_iata must be a 3-letter IATA code'),
+  trip_type        : z.enum(['one_way', 'return', 'multi_city']).default('one_way'),
 
+  // Single-leg / return fields (required for one_way + return, optional for multi_city)
+  origin_iata      : z.string().length(3).toUpperCase()
+                       .regex(/^[A-Z]{3}$/, 'origin_iata must be a 3-letter IATA code').optional(),
+  destination_iata : z.string().length(3).toUpperCase()
+                       .regex(/^[A-Z]{3}$/, 'destination_iata must be a 3-letter IATA code').optional(),
   departure_date   : z.string()
                        .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD format')
                        .refine(d => new Date(d) >= new Date(new Date().toDateString()), {
                          message: 'departure_date cannot be in the past',
-                       }),
-
+                       }).optional(),
   return_date      : z.string()
                        .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD format')
                        .optional(),
 
+  // Multi-city legs
+  multi_city_legs  : z.array(multiCityLegSchema).min(2).max(6).optional(),
+
   cabin_preference : z.enum(['economy', 'premium_economy', 'business', 'first']).optional(),
 
-  pax_count        : z.number().int().min(1).max(9).default(1),
+  // Pax breakdown
+  pax_adults       : z.number().int().min(1).max(9).default(1),
+  pax_children     : z.number().int().min(0).max(8).default(0),
+  pax_infants      : z.number().int().min(0).max(4).default(0),
+
+  // Frequent flyer
+  frequent_flyer_airline : z.string().min(2).max(3).toUpperCase().optional(),
+  frequent_flyer_number  : z.string().max(50).optional(),
 })
 .refine(
-  d => !d.return_date || new Date(d.return_date) > new Date(d.departure_date),
+  d => d.trip_type === 'multi_city' || (d.origin_iata && d.destination_iata && d.departure_date),
+  { message: 'origin_iata, destination_iata and departure_date are required for one_way/return trips', path: ['origin_iata'] }
+)
+.refine(
+  d => d.trip_type !== 'multi_city' || (d.multi_city_legs && d.multi_city_legs.length >= 2),
+  { message: 'multi_city_legs with at least 2 legs required for multi_city trips', path: ['multi_city_legs'] }
+)
+.refine(
+  d => !d.return_date || !d.departure_date || new Date(d.return_date) > new Date(d.departure_date),
   { message: 'return_date must be after departure_date', path: ['return_date'] }
 )
 .refine(
-  d => d.origin_iata !== d.destination_iata,
+  d => !d.origin_iata || !d.destination_iata || d.origin_iata !== d.destination_iata,
   { message: 'origin and destination cannot be the same', path: ['destination_iata'] }
+)
+.refine(
+  d => (d.pax_adults + (d.pax_children || 0) + (d.pax_infants || 0)) <= 9,
+  { message: 'Total passengers cannot exceed 9', path: ['pax_adults'] }
 );
 
 // ---------------------------------------------------------------------------

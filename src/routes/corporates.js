@@ -60,20 +60,43 @@ const updateCorporateSchema = createCorporateSchema
 // ---------------------------------------------------------------------------
 // Employee schemas
 // ---------------------------------------------------------------------------
+const frequentFlyerSchema = z.object({
+  airline_code : z.string().min(2).max(3).toUpperCase(),
+  number       : z.string().min(1).max(50),
+  tier         : z.string().max(50).optional(),   // e.g. Gold, Platinum, Miles&More
+}).strict()
+
+const preferencesSchema = z.object({
+  seat               : z.enum(['window','aisle','middle','no_preference']).optional(),
+  meal               : z.enum(['standard','vegetarian','vegan','halal','kosher','gluten_free','low_calorie','no_preference']).optional(),
+  special_assistance : z.boolean().optional(),
+  notes              : z.string().max(500).optional(),
+}).optional()
+
 const createEmployeeSchema = z.object({
-  name       : z.string().min(2).max(255).trim(),
-  title      : z.string().max(100).optional(),
-  department : z.string().max(100).optional(),
-  email      : z.string().email().max(255).toLowerCase(),
-  phone      : z.string().max(50).optional(),
-  passport   : passportSchema,
-  cabin_tier : z.enum(['economy','premium_economy','business','first']).optional(),
+  name            : z.string().min(2).max(255).trim(),
+  title           : z.string().max(100).optional(),
+  department      : z.string().max(100).optional(),
+  email           : z.string().email().max(255).toLowerCase(),
+  phone           : z.string().max(50).optional(),
+  employee_number : z.string().max(50).optional(),
+  cost_center     : z.string().max(100).optional(),
+  nationality     : z.string().length(2).toUpperCase().optional(),
+  date_of_birth   : z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  passport        : passportSchema,
+  cabin_tier      : z.enum(['economy','premium_economy','business','first']).optional(),
+  frequent_flyers : z.array(frequentFlyerSchema).max(10).optional(),
+  preferences     : preferencesSchema,
 });
 
 const updateEmployeeSchema = createEmployeeSchema
   .partial()
   .extend({ status: z.enum(['active','inactive','on_leave']).optional() })
   .refine(d => Object.keys(d).length > 0, { message: 'At least one field required' });
+
+const importEmployeeSchema = z.object({
+  employees: z.array(createEmployeeSchema).min(1).max(500),
+});
 
 // ---------------------------------------------------------------------------
 // Policy schema
@@ -175,6 +198,12 @@ router.patch( '/:id/employees/:eid',
 router.delete('/:id/employees/:eid',
   requireRole('SUPER_ADMIN', 'ADMIN', 'CONSULTANT'),
   ctrl.deleteEmployee
+);
+
+router.post(  '/:id/employees/import',
+  requireRole('SUPER_ADMIN', 'ADMIN'),
+  validate(importEmployeeSchema),
+  ctrl.importEmployees
 );
 
 // ===========================================================================
