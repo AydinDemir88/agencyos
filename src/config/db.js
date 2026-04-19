@@ -2,7 +2,7 @@ const { Pool } = require('pg');
 
 const pool = new Pool({
   connectionString: process.env.DB_URL,
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: true } : false,
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   min: parseInt(process.env.DB_POOL_MIN || '2', 10),
   max: parseInt(process.env.DB_POOL_MAX || '10', 10),
   idleTimeoutMillis: 30000,
